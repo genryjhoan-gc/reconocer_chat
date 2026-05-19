@@ -65,6 +65,11 @@
     border-radius: 6px;
     border-left: 3px solid #FF007F;
   }
+  .chat-emote {
+    height: 28px;
+    vertical-align: middle;
+    margin: -4px 2px;
+  }
   /* QUESTION */
   .question-panel {
     background: #1a1a1a;
@@ -221,6 +226,7 @@ const QUESTIONS = [
 let currentQuestionIndex = -1;
 let detectionActive = false;
 let matchLocked = false; // Bloqueo duro: una vez que alguien acierta, NADIE más activa el overlay hasta la siguiente pregunta.
+const thirdPartyEmotes = new Map(); // name -> URL (7TV channel emotes)
 
 const chatEl = document.getElementById('chat');
 const statusEl = document.getElementById('status');
@@ -254,7 +260,7 @@ function checkMatch(message, keywords) {
   return null;
 }
 
-function addChatMessage(user, message, color, isMatch) {
+function addChatMessage(user, message, color, isMatch, twitchEmotes) {
   const div = document.createElement('div');
   div.className = 'chat-msg' + (isMatch ? ' match' : '');
   const userSpan = document.createElement('span');
@@ -262,7 +268,7 @@ function addChatMessage(user, message, color, isMatch) {
   userSpan.textContent = user + ': ';
   if (color) userSpan.style.color = color;
   div.appendChild(userSpan);
-  div.appendChild(document.createTextNode(message));
+  div.appendChild(buildMessageNodes(message, twitchEmotes));
   chatEl.appendChild(div);
 
   // Mantener solo los últimos 100 mensajes
@@ -270,6 +276,79 @@ function addChatMessage(user, message, color, isMatch) {
     chatEl.removeChild(chatEl.firstChild);
   }
   chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+// Parsea el tag "emotes" del IRC de Twitch: "id:start-end,start-end/id:start-end"
+function parseTwitchEmotes(emotesTag) {
+  if (!emotesTag) return [];
+  const result = [];
+  emotesTag.split('/').forEach(group => {
+    const [id, positions] = group.split(':');
+    if (!id || !positions) return;
+    positions.split(',').forEach(range => {
+      const [s, e] = range.split('-').map(Number);
+      if (!isNaN(s) && !isNaN(e)) result.push({ id, start: s, end: e });
+    });
+  });
+  return result.sort((a, b) => a.start - b.start);
+}
+
+// Construye los nodos DOM del mensaje, reemplazando emotes Twitch nativos Y 7TV por <img>
+function buildMessageNodes(message, twitchEmotes) {
+  const fragment = document.createDocumentFragment();
+  const emotes = twitchEmotes || [];
+  // Usamos Array.from para iterar por code points (los emojis ocupan más de 1 char en UTF-16,
+  // pero los índices del tag emotes están en code points). Para mensajes con solo ASCII no afecta.
+  const chars = Array.from(message);
+  let cursor = 0;
+
+  for (const e of emotes) {
+    if (e.start > cursor) {
+      const textPart = chars.slice(cursor, e.start).join('');
+      appendTextWithThirdParty(fragment, textPart);
+    }
+    const emoteName = chars.slice(e.start, e.end + 1).join('');
+    appendTwitchEmote(fragment, emoteName, e.id);
+    cursor = e.end + 1;
+  }
+
+  if (cursor < chars.length) {
+    const textPart = chars.slice(cursor).join('');
+    appendTextWithThirdParty(fragment, textPart);
+  }
+  return fragment;
+}
+
+// Para texto sin emote nativo: tokeniza por espacios y reemplaza emotes 7TV si coinciden.
+function appendTextWithThirdParty(fragment, text) {
+  if (thirdPartyEmotes.size === 0) {
+    fragment.appendChild(document.createTextNode(text));
+    return;
+  }
+  // Split conservando los espacios como tokens separados
+  const tokens = text.split(/(\s+)/);
+  for (const token of tokens) {
+    if (token && thirdPartyEmotes.has(token)) {
+      const img = document.createElement('img');
+      img.className = 'chat-emote';
+      img.alt = token;
+      img.title = token;
+      img.src = thirdPartyEmotes.get(token);
+      fragment.appendChild(img);
+    } else if (token) {
+      fragment.appendChild(document.createTextNode(token));
+    }
+  }
+}
+
+function appendTwitchEmote(fragment, name, id) {
+  const img = document.createElement('img');
+  img.className = 'chat-emote';
+  img.alt = name;
+  img.title = name;
+  // /default/ devuelve la versión animada si existe, si no la estática.
+  img.src = `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`;
+  fragment.appendChild(img);
 }
 
 function showWinner(user, message) {
@@ -376,8 +455,43 @@ function handleIRCLine(line) {
   }
   const parsed = parseIRC(line);
   if (!parsed) return;
+  if (parsed.command === 'ROOMSTATE' && parsed.tags['room-id']) {
+    // Cuando entramos al canal, obtenemos su ID numérico → cargamos emotes 7TV.
+    load7TVEmotes(parsed.tags['room-id']);
+    return;
+  }
   if (parsed.command === 'PRIVMSG') {
     onChatMessage(parsed);
+  }
+}
+
+async function load7TVEmotes(twitchUserId) {
+  try {
+    const res = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
+    if (!res.ok) {
+      console.log('No hay perfil 7TV para este canal (status ' + res.status + ')');
+      return;
+    }
+    const data = await res.json();
+    const emotes = data?.emote_set?.emotes || [];
+    let count = 0;
+    for (const e of emotes) {
+      const host = e.data?.host;
+      if (!host || !host.url || !host.files) continue;
+      // Preferir webp 2x; fallback a la primera disponible.
+      const file = host.files.find(f => f.name === '2x.webp')
+                || host.files.find(f => f.name === '1x.webp')
+                || host.files.find(f => f.format === 'WEBP')
+                || host.files[0];
+      if (file) {
+        const url = 'https:' + host.url + '/' + file.name;
+        thirdPartyEmotes.set(e.name, url);
+        count++;
+      }
+    }
+    console.log(`Cargados ${count} emotes de 7TV para el canal.`);
+  } catch (err) {
+    console.error('Error cargando emotes 7TV:', err);
   }
 }
 
@@ -428,10 +542,11 @@ function onChatMessage(parsed) {
   const username = parsed.prefix.split('!')[0];
   const displayName = parsed.tags['display-name'] || username;
   const color = parsed.tags.color || '';
+  const twitchEmotes = parseTwitchEmotes(parsed.tags.emotes);
 
   // === Misma lógica de detección y bloqueo de antes ===
   if (matchLocked || !detectionActive) {
-    addChatMessage(displayName, message, color, false);
+    addChatMessage(displayName, message, color, false, twitchEmotes);
     return;
   }
 
@@ -439,12 +554,12 @@ function onChatMessage(parsed) {
   if (matched) {
     matchLocked = true;
     detectionActive = false;
-    addChatMessage(displayName, message, color, true);
+    addChatMessage(displayName, message, color, true, twitchEmotes);
     showWinner(displayName, message);
     return;
   }
 
-  addChatMessage(displayName, message, color, false);
+  addChatMessage(displayName, message, color, false, twitchEmotes);
 }
 
 connectTwitch();
