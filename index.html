@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLOODSITAX Trivia</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0D0D0D;
+    color: #fff;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .container {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 20px;
+    max-width: 1300px;
+    margin: 0 auto;
+  }
+  /* CHAT */
+  .chat-panel {
+    background: #1a1a1a;
+    border: 2px solid #FF007F;
+    border-radius: 12px;
+    height: 650px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chat-header {
+    background: #FF007F;
+    padding: 12px;
+    font-weight: bold;
+    text-align: center;
+  }
+  .chat-status {
+    font-size: 11px;
+    opacity: 0.85;
+    margin-top: 4px;
+    font-weight: normal;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .chat-msg {
+    word-wrap: break-word;
+    line-height: 1.4;
+    font-size: 14px;
+  }
+  .chat-msg .user {
+    font-weight: bold;
+    color: #FF2FA0;
+  }
+  .chat-msg.match {
+    background: rgba(255, 0, 127, 0.2);
+    padding: 6px 8px;
+    border-radius: 6px;
+    border-left: 3px solid #FF007F;
+  }
+  /* QUESTION */
+  .question-panel {
+    background: #1a1a1a;
+    border: 2px solid #FF007F;
+    border-radius: 12px;
+    padding: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 650px;
+    text-align: center;
+  }
+  .question-label {
+    font-size: 14px;
+    color: #FF2FA0;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+  }
+  .question-text {
+    font-size: 40px;
+    margin-bottom: 40px;
+    color: #fff;
+    min-height: 60px;
+  }
+  .controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    background: #FF007F;
+    color: #fff;
+    border: none;
+    padding: 14px 28px;
+    font-size: 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s;
+  }
+  button:hover:not(:disabled) { background: #FF2FA0; transform: translateY(-2px); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .info {
+    margin-top: 24px;
+    opacity: 0.55;
+    font-size: 13px;
+  }
+  /* WINNER OVERLAY */
+  .winner-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .winner-overlay.active { display: flex; }
+  .winner-card {
+    background: #1a1a1a;
+    border: 3px solid #FF007F;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    max-width: 520px;
+    width: 100%;
+    box-shadow: 0 0 60px #FF007F;
+    animation: pop 0.35s cubic-bezier(.2,1.4,.4,1);
+  }
+  @keyframes pop {
+    from { transform: scale(0.6); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+  .winner-title {
+    font-size: 22px;
+    color: #FF2FA0;
+    margin-bottom: 10px;
+    letter-spacing: 3px;
+  }
+  .winner-name {
+    font-size: 42px;
+    font-weight: bold;
+    margin-bottom: 24px;
+    color: #fff;
+    word-break: break-word;
+  }
+  .winner-msg {
+    background: #0D0D0D;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 28px;
+    font-style: italic;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Chat de Twitch -->
+  <div class="chat-panel">
+    <div class="chat-header">
+      CHAT DE TWITCH
+      <div class="chat-status" id="status">Conectando...</div>
+    </div>
+    <div class="chat-messages" id="chat"></div>
+  </div>
+
+  <!-- Panel de pregunta -->
+  <div class="question-panel">
+    <div class="question-label" id="qlabel">Trivia</div>
+    <div class="question-text" id="question">Presiona el botón para empezar</div>
+    <div class="controls">
+      <button id="btnStart">Mostrar pregunta</button>
+      <button id="btnNext" disabled>Siguiente pregunta</button>
+    </div>
+    <div class="info" id="info">—</div>
+  </div>
+</div>
+
+<!-- Overlay del ganador -->
+<div class="winner-overlay" id="winnerOverlay">
+  <div class="winner-card">
+    <div class="winner-title">¡GANADOR!</div>
+    <div class="winner-name" id="winnerName"></div>
+    <div class="winner-msg" id="winnerMsg"></div>
+    <button id="btnCloseWinner">Continuar</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js"></script>
+<script>
+// ============================================================
+// CONFIGURACIÓN — EDITA AQUÍ
+// ============================================================
+const TWITCH_CHANNEL = 'gcelsuport';
+
+const QUESTIONS = [
+  {
+    question: "¿a dónde voy?",
+    keywords: ["casa", "casaa", "cas a", "  casa", "la casa"]
+  },
+  // Agrega más preguntas así:
+  // {
+  //   question: "¿pregunta 2?",
+  //   keywords: ["palabra1", "palabra2", "otra palabra"]
+  // },
+];
+// ============================================================
+
+let currentQuestionIndex = -1;
+let detectionActive = false;
+let matchLocked = false; // Bloqueo duro: una vez que alguien acierta, NADIE más activa el overlay hasta la siguiente pregunta.
+
+const chatEl = document.getElementById('chat');
+const statusEl = document.getElementById('status');
+const questionEl = document.getElementById('question');
+const qlabelEl = document.getElementById('qlabel');
+const infoEl = document.getElementById('info');
+const btnStart = document.getElementById('btnStart');
+const btnNext = document.getElementById('btnNext');
+const btnCloseWinner = document.getElementById('btnCloseWinner');
+const winnerOverlay = document.getElementById('winnerOverlay');
+const winnerName = document.getElementById('winnerName');
+const winnerMsg = document.getElementById('winnerMsg');
+
+// Normaliza para matching: lowercase, sin acentos, espacios colapsados.
+function normalize(str) {
+  return str
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, ' ');
+}
+
+// Devuelve la keyword que matcheó, o null.
+function checkMatch(message, keywords) {
+  const normMsg = normalize(message);
+  for (const kw of keywords) {
+    const normKw = normalize(kw).trim();
+    if (normKw && normMsg.includes(normKw)) {
+      return kw;
+    }
+  }
+  return null;
+}
+
+function addChatMessage(user, message, color, isMatch) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg' + (isMatch ? ' match' : '');
+  const userSpan = document.createElement('span');
+  userSpan.className = 'user';
+  userSpan.textContent = user + ': ';
+  if (color) userSpan.style.color = color;
+  div.appendChild(userSpan);
+  div.appendChild(document.createTextNode(message));
+  chatEl.appendChild(div);
+
+  // Mantener solo los últimos 100 mensajes
+  while (chatEl.children.length > 100) {
+    chatEl.removeChild(chatEl.firstChild);
+  }
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function showWinner(user, message) {
+  // Guard idempotente: si ya hay un ganador, no sobrescribir.
+  if (winnerOverlay.classList.contains('active')) return;
+  winnerName.textContent = user;
+  winnerMsg.textContent = '"' + message + '"';
+  winnerOverlay.classList.add('active');
+  infoEl.textContent = '🔒 Detección pausada — presiona "Siguiente pregunta"';
+}
+
+function closeWinner() {
+  winnerOverlay.classList.remove('active');
+}
+
+function showQuestion(index) {
+  if (index < 0 || index >= QUESTIONS.length) return;
+  currentQuestionIndex = index;
+  questionEl.textContent = QUESTIONS[index].question;
+  qlabelEl.textContent = `Pregunta ${index + 1}`;
+  infoEl.textContent = `Pregunta ${index + 1} de ${QUESTIONS.length} — detectando palabras clave...`;
+  matchLocked = false;
+  detectionActive = true;
+}
+
+function endTrivia() {
+  questionEl.textContent = '¡Trivia terminada!';
+  qlabelEl.textContent = 'Fin';
+  infoEl.textContent = '—';
+  matchLocked = true;
+  detectionActive = false;
+  btnNext.disabled = true;
+}
+
+btnStart.addEventListener('click', () => {
+  if (QUESTIONS.length === 0) {
+    alert('No hay preguntas configuradas en el array QUESTIONS.');
+    return;
+  }
+  showQuestion(0);
+  btnStart.disabled = true;
+  btnNext.disabled = false;
+});
+
+btnNext.addEventListener('click', () => {
+  closeWinner();
+  const next = currentQuestionIndex + 1;
+  if (next < QUESTIONS.length) {
+    showQuestion(next);
+  } else {
+    endTrivia();
+  }
+});
+
+btnCloseWinner.addEventListener('click', closeWinner);
+
+// === Conexión a Twitch (anónima) ===
+const client = new tmi.Client({
+  channels: [TWITCH_CHANNEL]
+});
+
+client.on('connected', () => {
+  statusEl.textContent = `Conectado a #${TWITCH_CHANNEL}`;
+});
+
+client.on('disconnected', (reason) => {
+  statusEl.textContent = 'Desconectado: ' + (reason || 'sin razón');
+});
+
+client.on('message', (channel, tags, message, self) => {
+  const displayName = tags['display-name'] || tags.username || 'anon';
+  const color = tags.color;
+
+  // Si está bloqueado o sin detección activa → solo agregar mensaje normal y salir.
+  if (matchLocked || !detectionActive) {
+    addChatMessage(displayName, message, color, false);
+    return;
+  }
+
+  const matched = checkMatch(message, QUESTIONS[currentQuestionIndex].keywords);
+  if (matched) {
+    // CRÍTICO: cerrar el bloqueo ANTES de cualquier render o llamada async.
+    // Cualquier mensaje posterior verá matchLocked = true y caerá en el branch normal.
+    matchLocked = true;
+    detectionActive = false;
+    addChatMessage(displayName, message, color, true);
+    showWinner(displayName, message);
+    return;
+  }
+
+  addChatMessage(displayName, message, color, false);
+});
+
+client.connect().catch(err => {
+  statusEl.textContent = 'Error al conectar: ' + err;
+});
+</script>
+
+</body>
+</html>
