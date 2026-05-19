@@ -199,7 +199,6 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js"></script>
 <script>
 // ============================================================
 // CONFIGURACIÓN — EDITA AQUÍ
@@ -327,24 +326,110 @@ btnNext.addEventListener('click', () => {
 
 btnCloseWinner.addEventListener('click', closeWinner);
 
-// === Conexión a Twitch (anónima) ===
-const client = new tmi.Client({
-  channels: [TWITCH_CHANNEL]
-});
+// === Conexión directa al IRC de Twitch vía WebSocket (anónima) ===
+let twitchWS = null;
+let reconnectTimer = null;
 
-client.on('connected', () => {
-  statusEl.textContent = `Conectado a #${TWITCH_CHANNEL}`;
-});
+function connectTwitch() {
+  statusEl.textContent = 'Conectando...';
+  try {
+    twitchWS = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+  } catch (e) {
+    statusEl.textContent = 'Error al crear WebSocket: ' + e.message;
+    return;
+  }
 
-client.on('disconnected', (reason) => {
-  statusEl.textContent = 'Desconectado: ' + (reason || 'sin razón');
-});
+  twitchWS.onopen = () => {
+    // Login anónimo: cualquier nombre que empiece con "justinfan" + número funciona sin token.
+    const anonNick = 'justinfan' + Math.floor(Math.random() * 1000000);
+    twitchWS.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+    twitchWS.send('NICK ' + anonNick);
+    twitchWS.send('JOIN #' + TWITCH_CHANNEL.toLowerCase());
+    statusEl.textContent = `Conectado a #${TWITCH_CHANNEL}`;
+  };
 
-client.on('message', (channel, tags, message, self) => {
-  const displayName = tags['display-name'] || tags.username || 'anon';
-  const color = tags.color;
+  twitchWS.onmessage = (event) => {
+    const lines = event.data.split('\r\n');
+    for (const line of lines) {
+      if (!line) continue;
+      handleIRCLine(line);
+    }
+  };
 
-  // Si está bloqueado o sin detección activa → solo agregar mensaje normal y salir.
+  twitchWS.onclose = () => {
+    statusEl.textContent = 'Desconectado. Reintentando en 3s...';
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectTwitch, 3000);
+  };
+
+  twitchWS.onerror = (err) => {
+    console.error('WebSocket error', err);
+    statusEl.textContent = 'Error de WebSocket (ver consola)';
+  };
+}
+
+function handleIRCLine(line) {
+  // Mantener viva la conexión: Twitch nos hace ping cada cierto tiempo, respondemos pong.
+  if (line.startsWith('PING')) {
+    twitchWS.send('PONG :tmi.twitch.tv');
+    return;
+  }
+  const parsed = parseIRC(line);
+  if (!parsed) return;
+  if (parsed.command === 'PRIVMSG') {
+    onChatMessage(parsed);
+  }
+}
+
+// Parser mínimo de IRC con soporte de tags (lo que Twitch usa para display-name, color, etc.)
+function parseIRC(line) {
+  const tags = {};
+  let rest = line;
+
+  if (rest.startsWith('@')) {
+    const sp = rest.indexOf(' ');
+    if (sp === -1) return null;
+    const tagPart = rest.substring(1, sp);
+    rest = rest.substring(sp + 1);
+    tagPart.split(';').forEach(t => {
+      const eq = t.indexOf('=');
+      if (eq === -1) tags[t] = '';
+      else tags[t.substring(0, eq)] = t.substring(eq + 1);
+    });
+  }
+
+  let prefix = '';
+  if (rest.startsWith(':')) {
+    const sp = rest.indexOf(' ');
+    if (sp === -1) return null;
+    prefix = rest.substring(1, sp);
+    rest = rest.substring(sp + 1);
+  }
+
+  const sp = rest.indexOf(' ');
+  if (sp === -1) return { tags, prefix, command: rest, params: '' };
+  return {
+    tags,
+    prefix,
+    command: rest.substring(0, sp),
+    params: rest.substring(sp + 1)
+  };
+}
+
+function onChatMessage(parsed) {
+  // params tiene el formato: "#channel :texto del mensaje"
+  const colonIdx = parsed.params.indexOf(' :');
+  if (colonIdx === -1) return;
+  let message = parsed.params.substring(colonIdx + 2);
+  // Limpiar /me (mensajes de acción) - llegan envueltos en \u0001ACTION ...\u0001
+  if (message.startsWith('\u0001ACTION ') && message.endsWith('\u0001')) {
+    message = message.substring(8, message.length - 1);
+  }
+  const username = parsed.prefix.split('!')[0];
+  const displayName = parsed.tags['display-name'] || username;
+  const color = parsed.tags.color || '';
+
+  // === Misma lógica de detección y bloqueo de antes ===
   if (matchLocked || !detectionActive) {
     addChatMessage(displayName, message, color, false);
     return;
@@ -352,8 +437,6 @@ client.on('message', (channel, tags, message, self) => {
 
   const matched = checkMatch(message, QUESTIONS[currentQuestionIndex].keywords);
   if (matched) {
-    // CRÍTICO: cerrar el bloqueo ANTES de cualquier render o llamada async.
-    // Cualquier mensaje posterior verá matchLocked = true y caerá en el branch normal.
     matchLocked = true;
     detectionActive = false;
     addChatMessage(displayName, message, color, true);
@@ -362,11 +445,9 @@ client.on('message', (channel, tags, message, self) => {
   }
 
   addChatMessage(displayName, message, color, false);
-});
+}
 
-client.connect().catch(err => {
-  statusEl.textContent = 'Error al conectar: ' + err;
-});
+connectTwitch();
 </script>
 
 </body>
